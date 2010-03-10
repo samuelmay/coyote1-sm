@@ -71,7 +71,7 @@ _module_descriptor      long    hw#MDES_FORMAT_1                                
                         long    0                                                      '(RESERVED1) - set to zero to ensure compatability with future OS versions 
                         long    0                                                      '(RESERVED2) - set to zero to ensure compatability with future OS versions 
                         long    0                                                      '(RESERVED3) - set to zero to ensure compatability with future OS versions 
-                        long    4                                                      'Number of sockets
+                        long    5                                                      'Number of sockets
 
                         'Socket 0
                         byte    "In",0                                                 'Socket name  
@@ -90,16 +90,24 @@ _module_descriptor      long    hw#MDES_FORMAT_1                                
                         long    0                                                      'Default Value
 
                         'Socket 2
-                        byte    "+Bypass",0                                            'Socket name 
+                        byte    "Regen",0                                              'Socket name  
                         long    2 | hw#SOCKET_FLAG__INPUT                              'Socket flags and ID
+                        byte    "%",0                                                  'Units  
+                        long    0                                                      'Range Low            
+                        long    100                                                    'Range High
+                        long    50                                                     'Default Value
+                        
+                        'Socket 3
+                        byte    "+Bypass",0                                            'Socket name 
+                        long    3 | hw#SOCKET_FLAG__INPUT                              'Socket flags and ID
                         byte    0  {null string}                                       'Units   
                         long    0                                                      'Range Low          
                         long    1                                                      'Range High         
                         long    1                                                      'Default Value
 
-                        'Socket 3
+                        'Socket 4
                         byte    "+On",0                                                'Socket name 
-                        long    3                                                      'Socket flags and ID
+                        long    4                                                      'Socket flags and ID
                         byte    0  {null string}                                       'Units   
                         long    0                                                      'Range Low          
                         long    1                                                      'Range High         
@@ -134,10 +142,12 @@ _module_entry
                         add     p_socket_audio_in,  #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (0 << 2))
                         mov     p_socket_audio_out, p_module_control_block
                         add     p_socket_audio_out, #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (1 << 2))
+                        mov     p_socket_regen,     p_module_control_block
+                        add     p_socket_regen,     #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (2 << 2))
                         mov     p_socket_bypass,    p_module_control_block
-                        add     p_socket_bypass,    #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (2 << 2)) 
+                        add     p_socket_bypass,    #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (3 << 2)) 
                         mov     p_socket_on,        p_module_control_block
-                        add     p_socket_on,        #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (3 << 2))
+                        add     p_socket_on,        #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (4 << 2))
                         
                         
 
@@ -281,9 +291,14 @@ _lock3                  lockset hw#LOCK_ID__MEMBUS   wc
                         sar     r1,#1
 
                         'scale delay volume with the 'Depth' control signal
-                        sar     feedback,#2
 
                         'scale the feedback volume with the 'Regen' control signal
+                        
+                        rdlong  y, p_socket_regen
+                        mov     x, feedback
+                        call    #_gain
+                        mov     feedback, y
+                        sar     feedback,#2
                                                
                         'Sum the delayed and current samples
                         adds    r1, sram_data
@@ -308,6 +323,55 @@ _lock3                  lockset hw#LOCK_ID__MEMBUS   wc
                         jmp     #_frame_sync
 _loop_forever           jmp     #_loop_forever
 
+'------------------------------------
+'Multiply                                    
+'------------------------------------
+' Multiply x[15..0] by y[15..0] (y[31..16] must be 0)
+' on exit, product in y[31..0]
+'------------------------------------
+_mult                   shl x,#16               'get multiplicand into x[31..16]
+                        mov t,#16               'ready for 16 multiplier bits
+                        shr y,#1 wc             'get initial multiplier bit into c
+_loop
+                        if_c add y,x wc         'conditionally add multiplicand into product
+                        rcr y,#1 wc             'get next multiplier bit into c.
+                                                ' while shift product
+                        djnz t,#_loop           'loop until done
+_mult_ret               ret
+
+x                       long    $00000000
+y                       long    $00000000
+t                       long    $00000000
+
+'------------------------------------
+'Gain
+'------------------------------------
+'Apply a gain from a 0-100% control signal value (y) to an audio sample (x)
+'On exit, output in y
+
+_gain                   shr     y, #15 'scale control signal
+
+                        'Check if negative
+                        test    x, WORD_NEG  wc
+              if_c      jmp     #_negative       
+
+                        shr     x, #16
+                        and     x, WORD_MASK
+
+                        call    #_mult
+                        jmp     #_gain_ret
+                        
+
+_negative               neg     x, x
+
+                        shr     x, #16
+                        and     x, WORD_MASK
+
+                        call    #_mult
+
+                        neg     y, y
+
+_gain_ret               ret
 
 '------------------------------------
 'MEMBUS Read
@@ -537,7 +601,8 @@ p_frame_counter           res     1
 p_ss_overrun_detect       res     1   
 
 p_socket_audio_in         res     1 
-p_socket_audio_out        res     1 
+p_socket_audio_out        res     1
+p_socket_regen            res     1 
 p_socket_bypass           res     1 
 p_socket_on               res     1
 
