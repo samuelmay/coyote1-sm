@@ -149,9 +149,9 @@ _module_entry
                         'Init
                         '------------------------------------   
                         mov     sram_p_in, heap_base_address
-                        mov     delay, #1             ' in 16.16 fixed point
+                        mov     delay, #0             ' in 16.16 fixed point
                         mov     delay_direction, #1  ' flag
-                        mov     delay_increment, #30 ' in 16.16 fixed point
+                        mov     delay_increment, #20 ' in 16.16 fixed point
                         mov     feedback, #0
         
                         'Set MEMBUS interface as outputs
@@ -203,7 +203,7 @@ _frame_sync             rdlong  current_microframe, p_frame_counter
                         'Get audio in sample
                         '------------------------------------
                         rdlong  audio_in_sample, p_socket_audio_in
-                                              
+                        
                         '------------------------------------
                         'Bypass
                         '------------------------------------
@@ -220,20 +220,30 @@ _frame_sync             rdlong  current_microframe, p_frame_counter
         if_c_or_z       wrlong  audio_in_sample, p_socket_audio_out
         if_c_or_z       jmp     #_frame_sync
               
+
+                        'Save latest sample to sram
+                        mov     sram_data, audio_in_sample
+                        mov     sram_address, sram_p_in
+_lock2                  lockset hw#LOCK_ID__MEMBUS   wc
+              if_c      jmp     #_lock2
+                        call    #_sram_write
+                        lockclr hw#LOCK_ID__MEMBUS
+                                                                      
                         '------------------------------------
                         'Determine delay amount (in samples)
                         '------------------------------------
                         '
                         
+                        ' increment delay
+                        cmp     delay_direction, #0     wz
+        if_z            sub     delay, delay_increment                               
+        if_nz           add     delay, delay_increment                        
+
                         ' update direction
                         cmp     delay, MAX_DELAY        wc, wz
         if_nc_or_z      mov     delay_direction, #0
                         cmp     delay, MIN_DELAY        wc, wz
         if_c_or_z       mov     delay_direction, #1
-
-                        cmp     delay_direction, #0     wz
-        if_z            sub     delay, delay_increment                               
-        if_nz           add     delay, delay_increment
 
                         ' convert delay to 16 bit integer
                         mov     r1, delay
@@ -254,15 +264,12 @@ _frame_sync             rdlong  current_microframe, p_frame_counter
                         sub     sram_p_out, r1                 wc       'sram_p_out -= r1
                   if_nc sub     sram_p_out, heap_base_address  wc, nr   'if ((sram_p_out < heap_base_address) || (sram_p_out < 0))               
                   if_c  add     sram_p_out, SRAM_BUFFER_SIZE            '   sram_p_out += SRAM_BUFFER_SIZE
-              
-                        '------------------------------------
-                        'Do delay
-                        '------------------------------------
                         
-                        'Read delayed value
+                        'Read delayed value. This could be the current input sample
+                        '(once a cycle in fact, when the delay is 0) 
                         mov     sram_address, sram_p_out
-_lock2                  lockset hw#LOCK_ID__MEMBUS   wc
-              if_c      jmp     #_lock2
+_lock3                  lockset hw#LOCK_ID__MEMBUS   wc
+              if_c      jmp     #_lock3
                         call    #_sram_read
                         lockclr hw#LOCK_ID__MEMBUS
                          
@@ -270,28 +277,25 @@ _lock2                  lockset hw#LOCK_ID__MEMBUS   wc
                         mov     r1, audio_in_sample
 
                         ' halve samples to normalize gain
-                        'sar     sram_data,#1
-                        'sar     r1,#1
-                        sar     feedback,#1
+                        sar     sram_data,#1
+                        sar     r1,#1
+
+                        'scale delay volume with the 'Depth' control signal
+                        sar     feedback,#2
+
+                        'scale the feedback volume with the 'Regen' control signal
                                                
                         'Sum the delayed and current samples
                         adds    r1, sram_data
                         adds    r1, feedback
-                        'andn    r1,NOISE_MASK
+                        'smooth out noise
+                        andn    r1,NOISE_MASK
                                                                                 
                         'Send to output
                         wrlong  r1, p_socket_audio_out
 
                         'Save feedback
-                        mov     feedback, r1        
-                        
-                        'Save to sram
-                        mov     sram_data, audio_in_sample
-                        mov     sram_address, sram_p_in
-_lock3                  lockset hw#LOCK_ID__MEMBUS   wc
-              if_c      jmp     #_lock3
-                        call    #_sram_write
-                        lockclr hw#LOCK_ID__MEMBUS 
+                        mov     feedback, r1
 
                         'Bump SRAM pointer
                         add      sram_p_in, #3
@@ -490,9 +494,8 @@ NOISE_MASK              long   $0000ffff
 WORD_MASK               long   $0000ffff
 WORD_NEG                long   $80000000
 SIGNAL_TRUE             long   $40000000
-MIN_DELAY               long   $00010000
-MAX_DELAY               long   $00320000
-
+MAX_DELAY               long   $00310000
+MIN_DELAY               long   $00010000 
 '------------------------------------
 'Module End                                      
 '------------------------------------
