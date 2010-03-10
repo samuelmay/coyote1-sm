@@ -49,6 +49,8 @@ OBJ
 '       get_static_module_desc_p() will still cause the compiler to implement that module in code, which
 '       cause an unnecessary  waste of code space.
 
+  flanger:      "COYOTE1_MODULE_Flanger"
+
 {  
   
   noisegate:  "COYOTE1_MODULE_NoiseGate"
@@ -80,7 +82,7 @@ PUB get_static_module_desc_p(module_index)
   case module_index
     
     0:
-      return 0 'lfo.get_module_descriptor_p    
+      return flanger.get_module_descriptor_p    
     1:
       return 0 'utility.get_module_descriptor_p       
     2:
