@@ -50,7 +50,7 @@ OBJ
 '       cause an unnecessary  waste of code space.
 
   flanger:      "COYOTE1_MODULE_Flanger"
-
+  lfo:          "COYOTE1_MODULE_LFO"
 {  
   
   noisegate:  "COYOTE1_MODULE_NoiseGate"
@@ -84,7 +84,7 @@ PUB get_static_module_desc_p(module_index)
     0:
       return flanger.get_module_descriptor_p    
     1:
-      return 0 'utility.get_module_descriptor_p       
+      return lfo.get_module_descriptor_p       
     2:
       return 0 'distortion.get_module_descriptor_p
     3:  

@@ -2,8 +2,19 @@
 '' TITLE: COYOTE1_MODULE_Flanger.spin
 ''
 '' DESCRIPTION:
+''   A simple Flanger effect by Samuel May <sam.m4y@gmail.com>.
+''   Visit http://www.samuelmay.id.au for more crazy projects.
 ''
+''   INPUTS:
+''     DEPTH         Controls the gain of the delay feedforward, and thus the 'depth' of the flanging effect.
+''     LFO           Input for external LFO module that controls the magnitude of the delay.
+''     +BYPASS       Effect bypass control
+''   OUTPUTS
+''     +ON           Set when effect is active (i.e. not bypassed).
+''     +RATE BLINK   Blinks the LFO rate (for display to an LED).
+'' 
 '' COPYRIGHT:
+''   Copyright (C)2008 Eric Moyer
 ''   Copyright (C)2010 Samuel May
 ''
 '' LICENSING:
@@ -27,7 +38,8 @@
 ''
 ''  Rev    Date      Description
 ''  -----  --------  ---------------------------------------------------
-''  0.0.1  08-03-10  Development prototype.
+''  0.0.1  08-03-10  Initial creation.
+''  0.0.1  12-03-10  Modified to use external LFO module.
 ''
 ''=======================================================================  
 ''
@@ -40,7 +52,7 @@
 ''=======================================================================  
 CON
 
-  C_SRAM_BUFFER_SIZE           = 150           'Heap requirement
+  C_SRAM_BUFFER_SIZE           = 192           'Heap requirement
   C_SRAM_SAMPLE_SIZE           = 3             'Bytes per SRAM sample
   
 OBJ
@@ -63,7 +75,7 @@ _module_descriptor      long    hw#MDES_FORMAT_1                                
                         long    0                                                      'Module code pointer (this is a placeholder which gets overwritten during
                                                                                        '   the get_module_descriptor_p() call) 
                         long    $01_40_00_B7                                           'Module Signature
-                        long    $00_00_00_01                                           'Module revision  (xx_AA_BB_CC = a.b.c)
+                        long    $00_00_00_02                                           'Module revision  (xx_AA_BB_CC = a.b.c)
                         long    0                                                      'Microframe requirement
                         long    C_SRAM_BUFFER_SIZE + 4                                 'SRAM requirement (heap)
                         long    0                                                   'RAM  requirement (internal propeller RAM)
@@ -71,7 +83,7 @@ _module_descriptor      long    hw#MDES_FORMAT_1                                
                         long    0                                                      '(RESERVED1) - set to zero to ensure compatability with future OS versions 
                         long    0                                                      '(RESERVED2) - set to zero to ensure compatability with future OS versions 
                         long    0                                                      '(RESERVED3) - set to zero to ensure compatability with future OS versions 
-                        long    5                                                      'Number of sockets
+                        long    6                                                      'Number of sockets
 
                         'Socket 0
                         byte    "In",0                                                 'Socket name  
@@ -90,24 +102,32 @@ _module_descriptor      long    hw#MDES_FORMAT_1                                
                         long    0                                                      'Default Value
 
                         'Socket 2
-                        byte    "Regen",0                                              'Socket name  
+                        byte    "LFO",0                                                'Socket name  
                         long    2 | hw#SOCKET_FLAG__INPUT                              'Socket flags and ID
+                        byte    0                                                      'Units  
+                        long    0                                                      'Range Low            
+                        long    0                                                      'Range High
+                        long    0                                                      'Default Value
+
+                        'Socket 3
+                        byte    "Depth",0                                              'Socket name  
+                        long    3 | hw#SOCKET_FLAG__INPUT                              'Socket flags and ID
                         byte    "%",0                                                  'Units  
                         long    0                                                      'Range Low            
                         long    100                                                    'Range High
-                        long    50                                                     'Default Value
-                        
-                        'Socket 3
+                        long    100                                                    'Default Value
+
+                        'Socket 4
                         byte    "+Bypass",0                                            'Socket name 
-                        long    3 | hw#SOCKET_FLAG__INPUT                              'Socket flags and ID
+                        long    4 | hw#SOCKET_FLAG__INPUT                              'Socket flags and ID
                         byte    0  {null string}                                       'Units   
                         long    0                                                      'Range Low          
                         long    1                                                      'Range High         
                         long    1                                                      'Default Value
 
-                        'Socket 4
+                        'Socket 5
                         byte    "+On",0                                                'Socket name 
-                        long    4                                                      'Socket flags and ID
+                        long    5                                                      'Socket flags and ID
                         byte    0  {null string}                                       'Units   
                         long    0                                                      'Range Low          
                         long    1                                                      'Range High         
@@ -142,12 +162,14 @@ _module_entry
                         add     p_socket_audio_in,  #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (0 << 2))
                         mov     p_socket_audio_out, p_module_control_block
                         add     p_socket_audio_out, #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (1 << 2))
-                        mov     p_socket_regen,     p_module_control_block
-                        add     p_socket_regen,     #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (2 << 2))
+                        mov     p_socket_lfo,       p_module_control_block
+                        add     p_socket_lfo,       #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (2 << 2))
+                        mov     p_socket_depth,     p_module_control_block
+                        add     p_socket_depth,     #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (3 << 2))
                         mov     p_socket_bypass,    p_module_control_block
-                        add     p_socket_bypass,    #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (3 << 2)) 
+                        add     p_socket_bypass,    #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (4 << 2)) 
                         mov     p_socket_on,        p_module_control_block
-                        add     p_socket_on,        #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (4 << 2))
+                        add     p_socket_on,        #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (5 << 2))
                         
                         
 
@@ -159,10 +181,6 @@ _module_entry
                         'Init
                         '------------------------------------   
                         mov     sram_p_in, heap_base_address
-                        mov     delay, #0             ' in 16.16 fixed point
-                        mov     delay_direction, #1  ' flag
-                        mov     delay_increment, #20 ' in 16.16 fixed point
-                        mov     feedback, #0
         
                         'Set MEMBUS interface as outputs
                         or       dira, PINGROUP__MEM_INTERFACE
@@ -240,38 +258,31 @@ _lock2                  lockset hw#LOCK_ID__MEMBUS   wc
                         lockclr hw#LOCK_ID__MEMBUS
                                                                       
                         '------------------------------------
-                        'Determine delay amount (in samples)
+                        'Determine delay amount (in samples) from LFO
                         '------------------------------------
                         '
                         
-                        ' increment delay
-                        cmp     delay_direction, #0     wz
-        if_z            sub     delay, delay_increment                               
-        if_nz           add     delay, delay_increment                        
-
-                        ' update direction
-                        cmp     delay, MAX_DELAY        wc, wz
-        if_nc_or_z      mov     delay_direction, #0
-                        cmp     delay, MIN_DELAY        wc, wz
-        if_c_or_z       mov     delay_direction, #1
-
-                        ' convert delay to 16 bit integer
-                        mov     r1, delay
-                        shr     r1,#16
+                        ' Read LFO signal (Max $7FFFFFFF, Min depends on amplitude)
+                        rdlong  r1, p_socket_lfo
+                        ' invert LFO so that Min is 0 and Max depends on amplitude
+                        mov     delay,CONTROL_SOCKET_MAX_VALUE
+                        sub     delay,r1
+                        ' shift LFO value to be in range $0 - $40
+                        shr     delay,#25                             
                         ' multiply delay amount by 3 to get pointer
-                        mov     r2, r1
+                        mov     r2, delay
                         shl     r2, #1
-                        add     r1, r2
+                        add     delay, r2
                         
                         ' Protect against using a larger delay than supported by the size of the memory buffer we requested
-                        cmp     r1, SRAM_BUFFER_SIZE  wc
-              if_nc     mov     r1, SRAM_BUFFER_SIZE
+                        cmp     delay, SRAM_BUFFER_SIZE  wc
+              if_nc     mov     delay, SRAM_BUFFER_SIZE
               
                         '------------------------------------
                         'Determine read pointer
                         '------------------------------------
                         mov     sram_p_out, sram_p_in
-                        sub     sram_p_out, r1                 wc       'sram_p_out -= r1
+                        sub     sram_p_out, delay                 wc       'sram_p_out -= delay
                   if_nc sub     sram_p_out, heap_base_address  wc, nr   'if ((sram_p_out < heap_base_address) || (sram_p_out < 0))               
                   if_c  add     sram_p_out, SRAM_BUFFER_SIZE            '   sram_p_out += SRAM_BUFFER_SIZE
                         
@@ -286,31 +297,45 @@ _lock3                  lockset hw#LOCK_ID__MEMBUS   wc
                         'Get incoming signal
                         mov     r1, audio_in_sample
 
-                        ' halve samples to normalize gain
-                        sar     sram_data,#1
-                        sar     r1,#1
+                        '-------------------------------------
+                        'Scale delay volume with the 'Depth' control signal
+                        '-------------------------------------                        
+                        rdlong  y, p_socket_depth
+                        mov     x, sram_data
+                        shr     y, #15 'scale control signal
 
-                        'scale delay volume with the 'Depth' control signal
+                        'Check if negative
+                        test    x, WORD_NEG  wc
+              if_c      jmp     #_negative       
 
-                        'scale the feedback volume with the 'Regen' control signal
+                        shr     x, #16
+                        and     x, WORD_MASK
+
+                        call    #_mult
+                        jmp     #_depth_end
                         
-                        rdlong  y, p_socket_regen
-                        mov     x, feedback
-                        call    #_gain
-                        mov     feedback, y
-                        sar     feedback,#2
-                                               
+
+_negative               neg     x, x
+
+                        shr     x, #16
+                        and     x, WORD_MASK
+
+                        call    #_mult
+
+                        neg     y, y
+
+                        '--------------------------------------                       
                         'Sum the delayed and current samples
+                        '--------------------------------------
+                        ' halve samples to normalize gain
+_depth_end              sar     y,#1
+                        sar     r1,#1
                         adds    r1, sram_data
-                        adds    r1, feedback
                         'smooth out noise
                         andn    r1,NOISE_MASK
                                                                                 
                         'Send to output
                         wrlong  r1, p_socket_audio_out
-
-                        'Save feedback
-                        mov     feedback, r1
 
                         'Bump SRAM pointer
                         add      sram_p_in, #3
@@ -342,36 +367,6 @@ _mult_ret               ret
 x                       long    $00000000
 y                       long    $00000000
 t                       long    $00000000
-
-'------------------------------------
-'Gain
-'------------------------------------
-'Apply a gain from a 0-100% control signal value (y) to an audio sample (x)
-'On exit, output in y
-
-_gain                   shr     y, #15 'scale control signal
-
-                        'Check if negative
-                        test    x, WORD_NEG  wc
-              if_c      jmp     #_negative       
-
-                        shr     x, #16
-                        and     x, WORD_MASK
-
-                        call    #_mult
-                        jmp     #_gain_ret
-                        
-
-_negative               neg     x, x
-
-                        shr     x, #16
-                        and     x, WORD_MASK
-
-                        call    #_mult
-
-                        neg     y, y
-
-_gain_ret               ret
 
 '------------------------------------
 'MEMBUS Read
@@ -558,8 +553,8 @@ NOISE_MASK              long   $0000ffff
 WORD_MASK               long   $0000ffff
 WORD_NEG                long   $80000000
 SIGNAL_TRUE             long   $40000000
-MAX_DELAY               long   $00310000
-MIN_DELAY               long   $00010000 
+
+CONTROL_SOCKET_MAX_VALUE    long  hw#CONTROL_SOCKET_MAX_VALUE
 '------------------------------------
 'Module End                                      
 '------------------------------------
@@ -575,11 +570,8 @@ _module_end             long   0
 'Uninitialized Data
 '------------------------------------
 
-delay                   res     1
-delay_direction         res     1
-delay_increment         res     1
-feedback                res     1
-        
+delay                     res     1
+
 r1                        res     1
 r2                        res     1
 
@@ -602,7 +594,8 @@ p_ss_overrun_detect       res     1
 
 p_socket_audio_in         res     1 
 p_socket_audio_out        res     1
-p_socket_regen            res     1 
+p_socket_lfo              res     1
+p_socket_depth            res     1 
 p_socket_bypass           res     1 
 p_socket_on               res     1
 
