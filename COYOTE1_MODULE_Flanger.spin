@@ -330,7 +330,7 @@ _negative               neg     x, x
                         ' halve samples to normalize gain
 _depth_end              sar     y,#1
                         sar     r1,#1
-                        adds    r1, sram_data
+                        adds    r1, y
                         'smooth out noise
                         andn    r1,NOISE_MASK
                                                                                 
