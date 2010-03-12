@@ -50,6 +50,7 @@ OBJ
 '       cause an unnecessary  waste of code space.
 
   flanger:      "COYOTE1_MODULE_Flanger"
+  bitcrusher:   "COYOTE1_MODULE_Bitcrusher"
   lfo:          "COYOTE1_MODULE_LFO"
 {  
   
@@ -86,7 +87,7 @@ PUB get_static_module_desc_p(module_index)
     1:
       return lfo.get_module_descriptor_p       
     2:
-      return 0 'distortion.get_module_descriptor_p
+      return bitcrusher.get_module_descriptor_p
     3:  
       return 0
     
