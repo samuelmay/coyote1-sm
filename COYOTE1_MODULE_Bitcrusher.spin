@@ -6,7 +6,7 @@
 ''   Visit http://www.samuelmay.id.au for more crazy projects.
 ''
 ''   INPUTS:
-''     GAIN          Input gain.
+''     GATE          Input gain/gate control.
 ''     BITS          Number of bits to crush to. Range from 2 - 16. 
 ''     FILTER        Not yet implemented. To control some filter parameter for funky sounds.
 ''     +BYPASS       Effect bypass control
@@ -39,6 +39,7 @@
 ''  Rev    Date      Description
 ''  -----  --------  ---------------------------------------------------
 ''  0.0.1  12-03-10  Initial creation.
+''  0.0.2  13-03-10  Renamed 'Gain' control to 'Gate' to reflect its function.
 ''
 ''=======================================================================
 OBJ
@@ -60,7 +61,7 @@ _module_descriptor      long    hw#MDES_FORMAT_1                                
                         long    (@_module_end - @_module_entry)                        'Module legth
                         long    0                                                      'Module code pointer (this is a placeholder which gets overwritten during
                                                                                        '   the get_module_descriptor_p() call) 
-                        long    $20_40_00_B7                                           'Module Signature
+                        long    $22_40_00_B7                                           'Module Signature
                         long    $00_00_00_02                                           'Module revision  (xx_AA_BB_CC = a.b.c)
                         long    0                                                      'Microframe requirement
                         long    0                                                      'SRAM requirement (heap)
@@ -88,18 +89,18 @@ _module_descriptor      long    hw#MDES_FORMAT_1                                
                         long    0                                                      'Default Value
 
                         'Socket 2
-                        byte    "Input Gain",0                                         'Socket name  
+                        byte    "Gate",0                                         'Socket name  
                         long    2 | hw#SOCKET_FLAG__INPUT                              'Socket flags and ID
                         byte    "%",0                                                  'Units  
                         long    0                                                      'Range Low            
-                        long    100                                                    'Range High
-                        long    100                                                    'Default Value
+                        long    100                                                     'Range High
+                        long    50                                                    'Default Value
 
                         'Socket 3
                         byte    "Bits",0                                               'Socket name  
                         long    3 | hw#SOCKET_FLAG__INPUT                              'Socket flags and ID
                         byte    0                                                      'Units  
-                        long    2                                                      'Range Low            
+                        long    1                                                      'Range Low            
                         long    16                                                     'Range High
                         long    8                                                      'Default Value
 
@@ -123,7 +124,8 @@ _module_descriptor      long    hw#MDES_FORMAT_1                                
                         long    hw#NO_SEGMENTATION                                     'Segmentation 
 
 _module_descriptor_end  byte    0    
-                                  
+
+DAT                                  
 '------------------------------------
 'Entry
 '------------------------------------
@@ -142,8 +144,8 @@ _module_entry
                         add     p_socket_audio_in,  #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (0 << 2))
                         mov     p_socket_audio_out, p_module_control_block
                         add     p_socket_audio_out, #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (1 << 2))
-                        mov     p_socket_gain,      p_module_control_block
-                        add     p_socket_gain,      #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (2 << 2))
+                        mov     p_socket_gate,      p_module_control_block
+                        add     p_socket_gate,      #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (2 << 2))
                         mov     p_socket_bits,      p_module_control_block
                         add     p_socket_bits,      #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (3 << 2))
                         mov     p_socket_bypass,    p_module_control_block
@@ -208,41 +210,48 @@ _frame_sync             rdlong  current_microframe, p_frame_counter
                         '-------------------------------------
                         'Get number of bits to crush to
                         '-------------------------------------
-                        ' Read control signal value and shift so we have a range of 0-15
+                        ' Read control signal value and shift so we have a range of 1-16
                         rdlong  bits,p_socket_bits
-                        shr     bits,#27
+                        shr     bits,#28
+                        add     bits,#1
                         ' generate a mask for the $bits most significant bits
                         '(excluding sign bit, so the mask will be 0111...) 
                         mov     r1, WORD_NEG
                         shr     r1, #1          ' should be $4000_0000
                         mov     mask,#0
-_mask_gen_loop          shr     mask,#1
+_mask_loop              shr     mask,#1
                         or      mask,r1                          
-                        djnz    bits,#_mask_gen_loop
-
+                        djnz    bits,#_mask_loop
+                        
                         '-------------------------------------
                         'Do the crushin'
                         '-------------------------------------
-
-                        ' Read the input gain control
-                        rdlong  y, p_socket_gain
-                        shr     y, #15
-
+                        ' Read the input gate control, which is really a gain. 
+                        rdlong  r1, p_socket_gate
+                        'Convert to 16 bit integer                        
+                        shr     r1, #15
+                        ' "Invert" the integer so that 0 becomes FFFF and FFFF becomes 0.
+                        ' This reverses the control knob to the expected direction.            
+                        mov     y, WORD_MASK
+                        sub     y,r1
+                        
                         mov     x, audio_in_sample
                         'Check if sample is negative
                         test    x, WORD_NEG  wc
               if_c      jmp     #_negative       
 
-                        shr     x, #16
+                        'shr     x, #16          'scale sample for multiplication
+                        shr     x, #15          ' apply a bit of boost
                         and     x, WORD_MASK
-                        call    #_mult          ' apply gain
+                        call    #_mult          ' apply gate gain
                         and     y,mask          ' crush bits
                         jmp     #_effect_done
 
 _negative               neg     x, x
-                        shr     x, #16
+                        'shr     x, #16
+                        shr     x, #15          ' apply a bit of boost                        
                         and     x, WORD_MASK
-                        call    #_mult          ' apply gain
+                        call    #_mult          ' apply gate gain
                         and     y,mask          ' crush bits
                         neg     y, y                        
 
@@ -316,7 +325,7 @@ p_ss_overrun_detect       res     1
 
 p_socket_audio_in         res     1 
 p_socket_audio_out        res     1
-p_socket_gain             res     1
+p_socket_gate             res     1
 p_socket_bits             res     1 
 p_socket_bypass           res     1 
 p_socket_on               res     1
