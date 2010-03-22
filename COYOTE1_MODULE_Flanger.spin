@@ -45,15 +45,19 @@
 ''=======================================================================  
 ''
 '' Notes:
-''    The max value of an input control socket is $7FFF_FFFF. TODO: Manual rate and depth control.
+''    The max value of an input control socket is $7FFF_FFFF.
 ''
-''    Flanging reverses at 1ms. So that will be how big a buffer we need.
-''    The required SRAM buffer space is (0.001 s)*(44000 Hz)*(3 Bytes per sample) = 132 bytes.
+''    Invaluable resources for developing this module (as well as
+''    understanding flangers in general) have been:
+''
+''    http://www.spinsemi.com/knowledge_base/effects.html
+''    https://ccrma.stanford.edu/~jos/pasp/Flanging.html
+''    https://ccrma.stanford.edu/~jos/pasp/Linear_Interpolation.html
 ''
 ''=======================================================================  
 CON
 
-  C_SRAM_BUFFER_SIZE           = 192           'Heap requirement
+  C_SRAM_BUFFER_SIZE           = 195           'Heap requirement for 65 samples.
   C_SRAM_SAMPLE_SIZE           = 3             'Bytes per SRAM sample
   
 OBJ
@@ -266,24 +270,24 @@ _lock2                  lockset hw#LOCK_ID__MEMBUS   wc
                         ' Read LFO signal (Max $7FFFFFFF, Min depends on amplitude)
                         rdlong  r1, p_socket_lfo
                         ' invert LFO so that Min is 0 and Max depends on amplitude
-                        mov     delay,CONTROL_SOCKET_MAX_VALUE
-                        sub     delay,r1
-                        ' shift LFO value to be in range $0 - $40
-                        shr     delay,#25                             
+                        mov     delay_int,CONTROL_SOCKET_MAX_VALUE
+                        sub     delay_int,r1
+                        ' extract integer and fractional parts in range 0-63.99
+                        ' Fractional part is bottom 16 bits, integer part is top 15 bits. 
+                        mov     delay_frac,delay_int
+                        shr     delay_frac,#9
+                        and     delay_frac,WORD_MASK
+                        shr     delay_int,#25                             
                         ' multiply delay amount by 3 to get pointer
-                        mov     r2, delay
+                        mov     r2, delay_int
                         shl     r2, #1
-                        add     delay, r2
-                        
-                        ' Protect against using a larger delay than supported by the size of the memory buffer we requested
-                        cmp     delay, SRAM_BUFFER_SIZE  wc
-              if_nc     mov     delay, SRAM_BUFFER_SIZE
+                        add     delay_int, r2
               
                         '------------------------------------
-                        'Determine read pointer
+                        'Get first delay sample
                         '------------------------------------
                         mov     sram_p_out, sram_p_in
-                        sub     sram_p_out, delay                 wc       'sram_p_out -= delay
+                        sub     sram_p_out, delay_int          wc       'sram_p_out -= delay
                   if_nc sub     sram_p_out, heap_base_address  wc, nr   'if ((sram_p_out < heap_base_address) || (sram_p_out < 0))               
                   if_c  add     sram_p_out, SRAM_BUFFER_SIZE            '   sram_p_out += SRAM_BUFFER_SIZE
                         
@@ -294,15 +298,47 @@ _lock3                  lockset hw#LOCK_ID__MEMBUS   wc
               if_c      jmp     #_lock3
                         call    #_sram_read
                         lockclr hw#LOCK_ID__MEMBUS
-                         
+
+                        mov     delay_sample, sram_data
+                        
+                        '------------------------------------
+                        'Get second delay sample
+                        '------------------------------------
+                        add     delay_int,#3
+                        
+                        mov     sram_p_out, sram_p_in
+                        sub     sram_p_out, delay_int          wc       'sram_p_out -= delay
+                  if_nc sub     sram_p_out, heap_base_address  wc, nr   'if ((sram_p_out < heap_base_address) || (sram_p_out < 0))               
+                  if_c  add     sram_p_out, SRAM_BUFFER_SIZE            '   sram_p_out += SRAM_BUFFER_SIZE
+ 
+                        mov     sram_address, sram_p_out
+_lock4                  lockset hw#LOCK_ID__MEMBUS   wc
+              if_c      jmp     #_lock4
+                        call    #_sram_read
+                        lockclr hw#LOCK_ID__MEMBUS
+
+                        '------------------------------------
+                        'Interpolate between delay samples
+                        '------------------------------------
+                        'equation is
+                        '  y[n+d] = y[n] + d * (y[n+1] - y[n])
+                        ' where n is delay_int and d is delay_frac
+                        mov     m2, delay_frac
+                        mov     m1, sram_data
+                        subs    m1, delay_sample
+                        call    #_mults
+                        adds    delay_sample,m2                   
+
+                        '------------------------------------
                         'Get incoming signal
+                        '------------------------------------                        
                         mov     r1, audio_in_sample
 
                         '-------------------------------------
                         'Scale delay volume with the 'Depth' control signal
                         '-------------------------------------                        
                         rdlong  m2, p_socket_depth
-                        mov     m1, sram_data
+                        mov     m1, delay_sample
                         shr     m2, #15 'scale control signal
                         call    #_mults
 
@@ -586,7 +622,9 @@ _module_end             long   0
 'Uninitialized Data
 '------------------------------------
 
-delay                     res     1
+delay_int                 res     1
+delay_frac                res     1
+delay_sample              res     1
 
 r1                        res     1
 r2                        res     1
