@@ -39,7 +39,8 @@
 ''  Rev    Date      Description
 ''  -----  --------  ---------------------------------------------------
 ''  0.0.1  08-03-10  Initial creation.
-''  0.0.1  12-03-10  Modified to use external LFO module.
+''  0.0.2  12-03-10  Modified to use external LFO module.
+''  0.0.3  22-03-10  Implemented linear interpolating delay. 
 ''
 ''=======================================================================  
 ''
@@ -75,7 +76,7 @@ _module_descriptor      long    hw#MDES_FORMAT_1                                
                         long    0                                                      'Module code pointer (this is a placeholder which gets overwritten during
                                                                                        '   the get_module_descriptor_p() call) 
                         long    $01_40_00_B7                                           'Module Signature
-                        long    $00_00_00_02                                           'Module revision  (xx_AA_BB_CC = a.b.c)
+                        long    $00_00_00_03                                           'Module revision  (xx_AA_BB_CC = a.b.c)
                         long    0                                                      'Microframe requirement
                         long    C_SRAM_BUFFER_SIZE + 4                                 'SRAM requirement (heap)
                         long    0                                                   'RAM  requirement (internal propeller RAM)
@@ -300,37 +301,18 @@ _lock3                  lockset hw#LOCK_ID__MEMBUS   wc
                         '-------------------------------------
                         'Scale delay volume with the 'Depth' control signal
                         '-------------------------------------                        
-                        rdlong  y, p_socket_depth
-                        mov     x, sram_data
-                        shr     y, #15 'scale control signal
-
-                        'Check if negative
-                        test    x, WORD_NEG  wc
-              if_c      jmp     #_negative       
-
-                        shr     x, #16
-                        and     x, WORD_MASK
-
-                        call    #_mult
-                        jmp     #_depth_end
-                        
-
-_negative               neg     x, x
-
-                        shr     x, #16
-                        and     x, WORD_MASK
-
-                        call    #_mult
-
-                        neg     y, y
+                        rdlong  m2, p_socket_depth
+                        mov     m1, sram_data
+                        shr     m2, #15 'scale control signal
+                        call    #_mults
 
                         '--------------------------------------                       
                         'Sum the delayed and current samples
                         '--------------------------------------
                         ' halve samples to normalize gain
-_depth_end              sar     y,#1
+_depth_end              sar     m2,#1
                         sar     r1,#1
-                        adds    r1, y
+                        adds    r1, m2
                         'smooth out noise
                         andn    r1,NOISE_MASK
                                                                                 
@@ -349,24 +331,58 @@ _depth_end              sar     y,#1
 _loop_forever           jmp     #_loop_forever
 
 '------------------------------------
-'Multiply                                    
+'Signed multiply                                    
 '------------------------------------
-' Multiply x[15..0] by y[15..0] (y[31..16] must be 0)
-' on exit, product in y[31..0]
+''' Multiply integer part of 16.16 fixed point in m1 (31..16) by the fractional
+''' part of 16.16 fixed point in m2 (15..0).
+''' 
+''' On exit, 16.16 fixed point product in m2.
+''' 
+''' m1 may be signed. m2 CANNOT be signed.
+'''
+''' Takes 36 instructions, 30% faster than the stock _mult.
+        
 '------------------------------------
-_mult                   shl x,#16               'get multiplicand into x[31..16]
-                        mov t,#16               'ready for 16 multiplier bits
-                        shr y,#1 wc             'get initial multiplier bit into c
-_loop
-                        if_c add y,x wc         'conditionally add multiplicand into product
-                        rcr y,#1 wc             'get next multiplier bit into c.
-                                                ' while shift product
-                        djnz t,#_loop           'loop until done
-_mult_ret               ret
+_mults
+                andn    m1,WORD_MASK
+                and     m2,WORD_MASK
+                sar     m2,#1   wc '1st bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '2nd bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '3rd bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '4th bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '5th bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '6th bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '7th bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '8th bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '9th bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '10th bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '11th bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '12th bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '13th bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '14th bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '15th bit
+        if_c    adds    m2,m1
+                sar     m2,#1   wc '16th bit
+        if_c    adds    m2,m1
+                sar     m2,#1   'shift final result into place
+_mults_ret      ret
 
-x                       long    $00000000
-y                       long    $00000000
-t                       long    $00000000
+m1                       long    $00000000
+m2                       long    $00000000
 
 '------------------------------------
 'MEMBUS Read
