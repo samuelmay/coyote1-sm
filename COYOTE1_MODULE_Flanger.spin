@@ -2,16 +2,19 @@
 '' TITLE: COYOTE1_MODULE_Flanger.spin
 ''
 '' DESCRIPTION:
-''   A simple Flanger effect by Samuel May <sam.m4y@gmail.com>.
+''   A flanger effect by Samuel May <sam.m4y@gmail.com>.
 ''   Visit http://www.samuelmay.id.au for more crazy projects.
 ''
 ''   INPUTS:
-''     DEPTH         Controls the gain of the delay feedforward, and thus the 'depth' of the flanging effect.
-''     LFO           Input for external LFO module that controls the magnitude of the delay.
+''     DEPTH         Controls the gain of the delay feedforward, and thus the
+''                   'depth' of the flanging effect.
+''     REGEN         Controls the gain of the delay feedback. Can be used to
+''                   produce a more pronounced synth effect
+''     LFO           Input for external LFO module that controls the magnitude
+''                   of the delay.
 ''     +BYPASS       Effect bypass control
 ''   OUTPUTS
 ''     +ON           Set when effect is active (i.e. not bypassed).
-''     +RATE BLINK   Blinks the LFO rate (for display to an LED).
 '' 
 '' COPYRIGHT:
 ''   Copyright (C)2008 Eric Moyer
@@ -57,9 +60,12 @@
 ''
 ''=======================================================================  
 CON
-
-  C_SRAM_BUFFER_SIZE           = 198           'Heap requirement for 66 samples.
-  C_SRAM_SAMPLE_SIZE           = 3             'Bytes per SRAM sample
+  'Heap requirement for 70 samples. Not this many will be used, but rounded
+  'up for convienience. We'll need 64 for the biggest sweep, +1 for
+  'interpolation, plus 3 or 4 for the constant offset.
+  C_SRAM_BUFFER_SIZE           = 210
+  'Bytes per SRAM sample                                               
+  C_SRAM_SAMPLE_SIZE           = 3
   
 OBJ
   hw        :       "COYOTE1_HW_Definitions.spin"  'Hardware definitions       
@@ -80,7 +86,7 @@ _module_descriptor      long    hw#MDES_FORMAT_1                                
                         long    (@_module_end - @_module_entry)                        'Module legth
                         long    0                                                      'Module code pointer (this is a placeholder which gets overwritten during
                                                                                        '   the get_module_descriptor_p() call) 
-                        long    $01_40_00_B7                                           'Module Signature
+                        long    $02_00_00_B7                                           'Module Signature
                         long    $00_00_00_04                                           'Module revision  (xx_AA_BB_CC = a.b.c)
                         long    0                                                      'Microframe requirement
                         long    C_SRAM_BUFFER_SIZE + 4                                 'SRAM requirement (heap)
@@ -280,7 +286,10 @@ _frame_sync             rdlong  current_microframe, p_frame_counter
                         shr     delay_frac,#9
                         and     delay_frac,WORD_MASK
                         shr     delay_int,#25
-                        add     delay_int,#1                             
+                        ' This is our constant sweep offset. ATTENTION! YOU THE USER COULD TUNE THIS!
+                        ' todo: make this an initialization value 
+                        'add     delay_int,#1
+                        add     delay_int,#4                             
                         ' multiply delay amount by 3 to get pointer
                         mov     r2, delay_int
                         shl     r2, #1
@@ -297,8 +306,8 @@ _frame_sync             rdlong  current_microframe, p_frame_counter
                         'Read delayed value. This could be the current input sample
                         '(once a cycle in fact, when the delay is 0) 
                         mov     sram_address, sram_p_out
-_lock3                  lockset hw#LOCK_ID__MEMBUS   wc
-              if_c      jmp     #_lock3
+_lock2                  lockset hw#LOCK_ID__MEMBUS   wc
+              if_c      jmp     #_lock2
                         call    #_sram_read
                         lockclr hw#LOCK_ID__MEMBUS
 
@@ -315,8 +324,8 @@ _lock3                  lockset hw#LOCK_ID__MEMBUS   wc
                   if_c  add     sram_p_out, SRAM_BUFFER_SIZE            '   sram_p_out += SRAM_BUFFER_SIZE
  
                         mov     sram_address, sram_p_out
-_lock4                  lockset hw#LOCK_ID__MEMBUS   wc
-              if_c      jmp     #_lock4
+_lock3                  lockset hw#LOCK_ID__MEMBUS   wc
+              if_c      jmp     #_lock3
                         call    #_sram_read
                         lockclr hw#LOCK_ID__MEMBUS
 
@@ -333,9 +342,8 @@ _lock4                  lockset hw#LOCK_ID__MEMBUS   wc
                         adds    delay_sample,m2
 
                         '------------------------------------
-                        'Get incoming signal
-                        '------------------------------------                        
-
+                        'Here we start to operate on the input signal
+                        '------------------------------------
 
                         '------------------------------------
                         'Feedback. Scale delay volume with the 'Regen' control signal.
@@ -371,8 +379,8 @@ _lock4                  lockset hw#LOCK_ID__MEMBUS   wc
                         'Save latest sample to sram
                         mov     sram_data, audio_in_sample
                         mov     sram_address, sram_p_in
-_lock2                  lockset hw#LOCK_ID__MEMBUS   wc
-              if_c      jmp     #_lock2
+_lock4                  lockset hw#LOCK_ID__MEMBUS   wc
+              if_c      jmp     #_lock4
                         call    #_sram_write
                         lockclr hw#LOCK_ID__MEMBUS
                         
