@@ -6,12 +6,12 @@
 ''   Visit http://www.samuelmay.id.au for more crazy projects.
 ''
 ''   INPUTS:
-''     DEPTH         Controls the gain of the delay feedforward, and thus the
-''                   'depth' of the flanging effect.
-''     REGEN         Controls the gain of the delay feedback. Can be used to
-''                   produce a more pronounced synth effect
 ''     LFO           Input for external LFO module that controls the magnitude
 ''                   of the delay.
+''     DEPTH         Controls the prominance or depth of the flanging effect.
+''     MODE          Select 'feedforward' or 'feedback' mode. Feedforward mode
+''                   produces traditional, subtle analog flanging; feedback
+''                   mode produces a wilder synthy effect.
 ''     +BYPASS       Effect bypass control
 ''   OUTPUTS
 ''     +ON           Set when effect is active (i.e. not bypassed).
@@ -44,7 +44,8 @@
 ''  0.0.1  08-03-10  Initial creation.
 ''  0.0.2  12-03-10  Modified to use external LFO module.
 ''  0.0.3  22-03-10  Implemented linear interpolating delay.
-''  0.0.4  22-03-10  Added 'Regen' feedback comb control. 
+''  0.0.4  22-03-10  Added 'Regen' feedback comb control.
+''  0.0.5  24-03-10  Change to one depth control and a mode selection control. 
 ''
 ''=======================================================================  
 ''
@@ -87,7 +88,7 @@ _module_descriptor      long    hw#MDES_FORMAT_1                                
                         long    0                                                      'Module code pointer (this is a placeholder which gets overwritten during
                                                                                        '   the get_module_descriptor_p() call) 
                         long    $02_00_00_B7                                           'Module Signature
-                        long    $00_00_00_04                                           'Module revision  (xx_AA_BB_CC = a.b.c)
+                        long    $00_00_00_05                                           'Module revision  (xx_AA_BB_CC = a.b.c)
                         long    0                                                      'Microframe requirement
                         long    C_SRAM_BUFFER_SIZE + 4                                 'SRAM requirement (heap)
                         long    0                                                      'RAM  requirement (internal propeller RAM)
@@ -130,11 +131,11 @@ _module_descriptor      long    hw#MDES_FORMAT_1                                
                         long    100                                                    'Default Value
 
                         'Socket 4
-                        byte    "Regen",0                                              'Socket name  
+                        byte    "Mode",0                                               'Socket name  
                         long    4 | hw#SOCKET_FLAG__INPUT                              'Socket flags and ID
-                        byte    "%",0                                                  'Units  
+                        byte    0                                                      'Units  
                         long    0                                                      'Range Low            
-                        long    100                                                    'Range High
+                        long    1                                                      'Range High
                         long    0                                                      'Default Value
 
                         'Socket 5
@@ -186,8 +187,8 @@ _module_entry
                         add     p_socket_lfo,       #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (2 << 2))
                         mov     p_socket_depth,     p_module_control_block
                         add     p_socket_depth,     #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (3 << 2))
-                        mov     p_socket_regen,     p_module_control_block
-                        add     p_socket_regen,     #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (4 << 2))                        
+                        mov     p_socket_mode,      p_module_control_block
+                        add     p_socket_mode,      #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (4 << 2))                        
                         mov     p_socket_bypass,    p_module_control_block
                         add     p_socket_bypass,    #(hw#MCB_OFFSET__SOCKET_EXCHANGE + (5 << 2)) 
                         mov     p_socket_on,        p_module_control_block
@@ -342,37 +343,36 @@ _lock3                  lockset hw#LOCK_ID__MEMBUS   wc
                         adds    delay_sample,m2
 
                         '------------------------------------
-                        'Here we start to operate on the input signal
+                        'Scale delay amplitude according to Depth control
                         '------------------------------------
-
-                        '------------------------------------
-                        'Feedback. Scale delay volume with the 'Regen' control signal.
-                        '------------------------------------                        
-                        rdlong  m2, p_socket_regen
-                        mov     m1, delay_sample
-                        shr     m2, #15 'scale control signal
-                        call    #_mults
-                        subs    audio_in_sample,m2
-                        
-                        '-------------------------------------
-                        'Feedforward. Scale delay volume with the 'Depth' control signal
-                        '-------------------------------------                        
                         rdlong  m2, p_socket_depth
+                        shr     m2, #15                        
                         mov     m1, delay_sample
-                        shr     m2, #15 'scale control signal
                         call    #_mults
 
-                        '--------------------------------------                       
-                        'Sum the delayed and current samples
-                        '--------------------------------------
-                        ' halve samples to normalize gain
-                        sar     m2,#1
-                        mov     r1, audio_in_sample
-                        sar     r1,#1
+                        '------------------------------------
+                        'Get mode setting
+                        '------------------------------------
+                        rdlong  r1, p_socket_mode
+                        cmp     SIGNAL_TRUE,r1          wc
+        if_c            jmp     #_feedback_mode
+
+                        '-------------------------------------
+                        'Feedforward
+                        '-------------------------------------                        
+_feedforward_mode       mov     r1, audio_in_sample
                         adds    r1, m2
+                        jmp     #_effect_done
+                        
+                        '------------------------------------
+                        'Feedback
+                        '------------------------------------
+_feedback_mode          subs    audio_in_sample,m2      ' delay effect will be recirculated
+                        mov     r1,audio_in_sample
+
+_effect_done
                         'smooth out noise
-                        andn    r1,NOISE_MASK
-                                                                                
+                        andn    r1,NOISE_MASK                                                                                
                         'Send to output
                         wrlong  r1, p_socket_audio_out
 
@@ -679,7 +679,7 @@ p_socket_audio_in         res     1
 p_socket_audio_out        res     1
 p_socket_lfo              res     1
 p_socket_depth            res     1
-p_socket_regen            res     1 
+p_socket_mode             res     1 
 p_socket_bypass           res     1 
 p_socket_on               res     1
 
